@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply bg-marfil text-ingles-dark antialiased;
+  }
+  body {
+    @apply font-sans;
+  }
+  h1,
+  h2,
+  h3 {
+    @apply font-display;
+  }
+}
+
+@layer components {
+  .input {
+    @apply w-full rounded-lg border border-nude/60 bg-white px-3 py-2 text-sm text-ingles-dark
+      placeholder:text-taupe/70 focus:border-ingles focus:outline-none focus:ring-2 focus:ring-ingles/20;
+  }
+}
