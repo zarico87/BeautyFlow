@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import DataTable from '@/components/ui/DataTable'
 import PageHeader from '@/components/ui/PageHeader'
 import { supabase } from '@/lib/supabase'
+import { showError, showSuccess, showConfirm } from '@/utils/alerts'
 
 /** Carga la lista de clientes ordenados por nombre */
 export async function loadClients() {
@@ -57,8 +58,9 @@ export default function Clients() {
       ])
 
     if (error) {
-      alert('Error al guardar el cliente: ' + error.message)
+      showError('Error al guardar el cliente', error.message)
     } else {
+      showSuccess('¡Cliente guardado!', 'El cliente ha sido registrado correctamente.')
       setFormData({ full_name: '', phone: '', email: '', notes: '' })
       setIsModalOpen(false)
       fetchClients()
@@ -67,7 +69,11 @@ export default function Clients() {
 
   // Eliminar un cliente
   const handleDelete = async (id) => {
-    if (!confirm('¿Estás seguro de que deseas eliminar este cliente?')) return
+    const confirmed = await showConfirm(
+      '¿Eliminar cliente?',
+      '¿Estás seguro de que deseas eliminar este cliente?'
+    )
+    if (!confirmed) return
 
     const { error } = await supabase
       .from('clients')
@@ -75,8 +81,9 @@ export default function Clients() {
       .eq('id', id)
 
     if (error) {
-      alert('Error al eliminar el cliente: ' + error.message)
+      showError('Error al eliminar el cliente', error.message)
     } else {
+      showSuccess('Cliente eliminado')
       fetchClients()
     }
   }

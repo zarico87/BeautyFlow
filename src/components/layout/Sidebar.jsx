@@ -35,7 +35,7 @@ export default function Sidebar({ open, onClose }) {
         }`}
       >
         <div className="flex items-center gap-3 px-6 py-6">
-          <img src="/logo.svg" alt="" className="h-9 w-9 rounded-lg" />
+          <img src="/logo.svg" alt="BeautyFlow" className="h-10 w-10 object-contain rounded-lg" />
           <div>
             <p className="font-display text-2xl font-semibold leading-none">BeautyFlow</p>
             <p className="mt-1 text-[10px] uppercase tracking-widest text-nude">Spa & Beauty</p>

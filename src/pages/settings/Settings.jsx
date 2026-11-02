@@ -4,17 +4,30 @@ import Card from '@/components/ui/Card'
 import Field from '@/components/ui/Field'
 import PageHeader from '@/components/ui/PageHeader'
 import { settingsSections } from '@/data/settingsSections'
-import { isSupabaseConfigured, supabase } from '@/lib/supabase'
+import { isSupabaseConfigured, supabase, createTransientClient } from '@/lib/supabase'
 import { loadSettings, saveSettings } from '@/services/settings'
 import { formatCuit, isValidCuit } from '@/utils/cuit'
+import { showError, showSuccess, showWarning, showConfirm } from '@/utils/alerts'
+import { useAuth } from '@/contexts/AuthContext'
+import { roleLabels } from '@/utils/roles'
 
 /** Componente interno para gestionar Usuarios, Alta y Roles */
 function UsersSection() {
+  const { role: currentRole } = useAuth()
+  const isAdmin = currentRole === 'admin'
+
   const [profiles, setProfiles] = useState([])
   const [loading, setLoading] = useState(true)
   const [isModalOpen, setIsModalOpen] = useState(false)
-  const [editingId, setEditingId] = useState(null)
-  const [editName, setEditName] = useState('')
+
+  // Estado para editar usuario completo (solo admin)
+  const [editingUser, setEditingUser] = useState(null)
+  const [editFormData, setEditFormData] = useState({
+    full_name: '',
+    role: 'receptionist',
+    newPassword: '',
+  })
+  const [savingEdit, setSavingEdit] = useState(false)
 
   const [newUser, setNewUser] = useState({
     email: '',
@@ -22,6 +35,7 @@ function UsersSection() {
     full_name: '',
     role: 'receptionist',
   })
+  const [creating, setCreating] = useState(false)
 
   // Cargar usuarios desde la tabla profiles
   const fetchProfiles = async () => {
@@ -39,31 +53,120 @@ function UsersSection() {
     fetchProfiles()
   }, [])
 
-  // Guardar nombre actualizado
-  const handleSaveName = async (id) => {
-    const { error } = await supabase
-      .from('profiles')
-      .update({ full_name: editName })
-      .eq('id', id)
+  // Contar usuarios del equipo (recepcionistas y profesionales, máx 20)
+  const teamMembers = profiles.filter((p) => p.role === 'receptionist' || p.role === 'professional')
+  const teamCount = teamMembers.length
+  const MAX_TEAM_USERS = 20
 
-    if (error) {
-      alert('Error al actualizar nombre: ' + error.message)
-    } else {
-      setEditingId(null)
-      fetchProfiles()
+  // Abrir modal de edición completa para un usuario
+  const handleOpenEditUser = (user) => {
+    if (!isAdmin) {
+      showWarning('Acceso restringido', 'Solo el administrador puede editar el usuario completo.')
+      return
     }
+    setEditingUser(user)
+    setEditFormData({
+      full_name: user.full_name || '',
+      role: user.role || 'receptionist',
+      newPassword: '',
+    })
   }
 
-  // Cambiar rol de usuario
-  const handleRoleChange = async (id, newRole) => {
-    const { error } = await supabase
+  // Guardar edición completa de usuario
+  const handleSaveEditUser = async (e) => {
+    e.preventDefault()
+    if (!isAdmin) {
+      showError('No autorizado', 'Solo el administrador puede editar usuarios.')
+      return
+    }
+    if (!editFormData.full_name.trim()) {
+      showWarning('Campo requerido', 'El nombre y apellido no puede estar vacío.')
+      return
+    }
+
+    // Verificar límite de 20 si cambia de admin a recepcionista/profesional
+    if (
+      editingUser.role === 'admin' &&
+      (editFormData.role === 'receptionist' || editFormData.role === 'professional') &&
+      teamCount >= MAX_TEAM_USERS
+    ) {
+      showWarning(
+        'Límite de equipo alcanzado',
+        `Se pueden cargar como máximo hasta ${MAX_TEAM_USERS} usuarios entre recepcionistas y profesionales.`
+      )
+      return
+    }
+
+    // Si se asigna un rol distinto al admin y se solicita cambio de contraseña, validar
+    if (editFormData.role !== 'admin' && editFormData.newPassword && editFormData.newPassword.length < 6) {
+      showWarning('Contraseña corta', 'La contraseña asignada debe tener al menos 6 caracteres.')
+      return
+    }
+
+    setSavingEdit(true)
+
+    // Actualizar datos del perfil
+    const { error: profileError } = await supabase
       .from('profiles')
-      .update({ role: newRole })
-      .eq('id', id)
+      .update({
+        full_name: editFormData.full_name.trim(),
+        role: editFormData.role,
+      })
+      .eq('id', editingUser.id)
+
+    setSavingEdit(false)
+
+    if (profileError) {
+      showError('Error al actualizar usuario', profileError.message)
+      return
+    }
+
+    // Si se convirtió a profesional, asegurar que exista en la tabla professionals
+    if (editFormData.role === 'professional') {
+      const { data: existingProf } = await supabase
+        .from('professionals')
+        .select('id')
+        .eq('name', editFormData.full_name.trim())
+        .maybeSingle()
+
+      if (!existingProf) {
+        await supabase.from('professionals').insert([
+          {
+            name: editFormData.full_name.trim(),
+            specialty: 'Estética / Spa',
+            active: true,
+          },
+        ])
+      }
+    }
+
+    showSuccess(
+      'Usuario actualizado',
+      `El usuario completo ha sido modificado exitosamente con rol ${roleLabels[editFormData.role] || editFormData.role}.`
+    )
+    setEditingUser(null)
+    fetchProfiles()
+  }
+
+  // Eliminar usuario
+  const handleDeleteUser = async (user) => {
+    if (!isAdmin) {
+      showWarning('Acceso restringido', 'Solo el administrador puede eliminar usuarios.')
+      return
+    }
+
+    const confirmed = await showConfirm(
+      '¿Eliminar usuario?',
+      `¿Estás seguro de que deseas eliminar a "${user.full_name || 'este usuario'}" del sistema? Esta acción es permanente.`
+    )
+    if (!confirmed) return
+
+    const { error } = await supabase.from('profiles').delete().eq('id', user.id)
 
     if (error) {
-      alert('Error al actualizar el rol: ' + error.message)
+      showError('Error al eliminar usuario', error.message)
     } else {
+      showSuccess('Usuario eliminado', 'El usuario ha sido removido del sistema.')
       fetchProfiles()
     }
   }
@@ -71,61 +174,124 @@ function UsersSection() {
   // Crear un nuevo registro de usuario en Supabase Auth y Profiles
   const handleAddUser = async (e) => {
     e.preventDefault()
-    if (!newUser.full_name || !newUser.email || !newUser.password) {
-      alert('Por favor completa el nombre, email y contraseña.')
+    if (!isAdmin) {
+      showWarning('Acceso restringido', 'Solo el administrador puede agregar usuarios.')
       return
     }
 
-    // 1. Registrar cuenta de usuario en Supabase Auth
-    const { data: authData, error: authError } = await supabase.auth.signUp({
-      email: newUser.email,
+    if (!newUser.full_name.trim() || !newUser.email.trim() || !newUser.password) {
+      showWarning('Campos requeridos', 'Por favor completa el nombre, email y contraseña.')
+      return
+    }
+
+    // Verificar límite de 20 usuarios entre recepcionista y profesionales
+    if (
+      (newUser.role === 'receptionist' || newUser.role === 'professional') &&
+      teamCount >= MAX_TEAM_USERS
+    ) {
+      showWarning(
+        'Límite de equipo alcanzado',
+        `Se pueden cargar como máximo hasta ${MAX_TEAM_USERS} usuarios entre recepcionistas y profesionales.`
+      )
+      return
+    }
+
+    if (newUser.password.length < 6) {
+      showWarning('Contraseña corta', 'La contraseña debe tener al menos 6 caracteres.')
+      return
+    }
+
+    setCreating(true)
+
+    // Usar cliente temporal sin persistencia para NO sobrescribir la sesión actual del admin
+    const transientClient = createTransientClient() || supabase
+
+    const { data: authData, error: authError } = await transientClient.auth.signUp({
+      email: newUser.email.trim(),
       password: newUser.password,
       options: {
         data: {
-          full_name: newUser.full_name,
+          full_name: newUser.full_name.trim(),
+          role: newUser.role,
         },
       },
     })
 
     if (authError) {
-      alert('Error al registrar usuario: ' + authError.message)
+      setCreating(false)
+      showError('Error al registrar usuario', authError.message)
       return
     }
 
-    // 2. Insertar o actualizar los datos del usuario en la tabla profiles
-    if (authData.user) {
+    // Insertar en tabla profiles
+    if (authData?.user) {
       const { error: profileError } = await supabase
         .from('profiles')
         .upsert([
           {
             id: authData.user.id,
-            full_name: newUser.full_name,
+            full_name: newUser.full_name.trim(),
             role: newUser.role,
           },
         ])
 
       if (profileError) {
-        alert('Error al guardar perfil de usuario: ' + profileError.message)
-      } else {
-        alert('¡Usuario agregado correctamente!')
-        setNewUser({ email: '', password: '', full_name: '', role: 'receptionist' })
-        setIsModalOpen(false)
-        fetchProfiles()
+        setCreating(false)
+        showError('Error al guardar perfil de usuario', profileError.message)
+        return
       }
+
+      // Si es profesional, agregarlo también al directorio de profesionales
+      if (newUser.role === 'professional') {
+        await supabase.from('professionals').insert([
+          {
+            name: newUser.full_name.trim(),
+            specialty: 'Estética / Spa',
+            active: true,
+          },
+        ])
+      }
+
+      showSuccess(
+        '¡Usuario agregado!',
+        `Usuario creado con éxito (${roleLabels[newUser.role] || newUser.role}). Ya puede ingresar a su sesión.`
+      )
+      setNewUser({ email: '', password: '', full_name: '', role: 'receptionist' })
+      setIsModalOpen(false)
+      fetchProfiles()
     }
+    setCreating(false)
   }
 
   if (loading) return <p className="text-sm text-gray-500">Cargando usuarios de Supabase...</p>
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      {/* Resumen del equipo y contador de límite */}
+      <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-gray-50 rounded-xl border border-gray-100">
         <div>
-          <p className="text-xs text-gray-500">
-            Administra los nombres y permisos de acceso del equipo.
+          <p className="text-xs uppercase tracking-wider text-gray-500 font-semibold">
+            Equipo de trabajo
+          </p>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="text-sm font-medium text-gray-900">
+              {teamCount} / {MAX_TEAM_USERS} usuarios
+            </span>
+            <span className="text-xs text-gray-500">
+              (recepcionistas y profesionales)
+            </span>
+          </div>
+          <p className="text-[11px] text-gray-400 mt-0.5">
+            Los usuarios creados pueden ingresar a su sesión pero no tienen acceso a Configuración ni Reportes.
           </p>
         </div>
-        <Button onClick={() => setIsModalOpen(true)}>+ Agregar Usuario</Button>
+
+        <Button
+          onClick={() => setIsModalOpen(true)}
+          disabled={!isAdmin || (teamCount >= MAX_TEAM_USERS && newUser.role !== 'admin')}
+        >
+          + Agregar Usuario
+        </Button>
       </div>
 
       <div className="overflow-x-auto border border-gray-100 rounded-lg">
@@ -134,67 +300,57 @@ function UsersSection() {
             <tr>
               <th className="py-2.5 px-3">Usuario / Nombre</th>
               <th className="py-2.5 px-3">Rol Actual</th>
-              <th className="py-2.5 px-3">Asignar Rol</th>
+              <th className="py-2.5 px-3">Acceso al Sistema</th>
+              <th className="py-2.5 px-3 text-right">Acciones</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {profiles.map((p) => (
               <tr key={p.id}>
                 <td className="py-3 px-3 font-medium">
-                  {editingId === p.id ? (
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        className="input !py-1 text-xs"
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleSaveName(p.id)}
-                        className="text-xs text-emerald-700 font-bold hover:underline"
-                      >
-                        Guardar
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setEditingId(null)}
-                        className="text-xs text-gray-500 hover:underline"
-                      >
-                        Cancelar
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <span>{p.full_name || 'Sin Nombre'}</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingId(p.id)
-                          setEditName(p.full_name || '')
-                        }}
-                        className="text-[11px] text-blue-600 hover:underline"
-                      >
-                        (Editar)
-                      </button>
-                    </div>
-                  )}
+                  <span>{p.full_name || 'Sin Nombre'}</span>
                 </td>
                 <td className="py-3 px-3">
-                  <span className="capitalize px-2 py-0.5 text-xs rounded-full bg-emerald-100 text-emerald-800 font-medium">
-                    {p.role || 'receptionist'}
+                  <span
+                    className={`capitalize px-2 py-0.5 text-xs rounded-full font-medium ${
+                      p.role === 'admin'
+                        ? 'bg-purple-100 text-purple-800'
+                        : p.role === 'professional'
+                        ? 'bg-blue-100 text-blue-800'
+                        : 'bg-emerald-100 text-emerald-800'
+                    }`}
+                  >
+                    {roleLabels[p.role] || p.role || 'Recepcionista'}
                   </span>
                 </td>
-                <td className="py-3 px-3">
-                  <select
-                    className="input text-xs !py-1"
-                    value={p.role || 'receptionist'}
-                    onChange={(e) => handleRoleChange(p.id, e.target.value)}
-                  >
-                    <option value="admin">Administrador</option>
-                    <option value="receptionist">Recepcionista</option>
-                    <option value="professional">Profesional</option>
-                  </select>
+                <td className="py-3 px-3 text-xs text-gray-500">
+                  {p.role === 'admin' ? (
+                    <span className="text-purple-700 font-medium">Acceso total (Admin)</span>
+                  ) : (
+                    <span className="text-gray-600">
+                      Turnos y Clientes · <strong className="text-gray-400 font-normal">Sin acceso a Config/Reportes</strong>
+                    </span>
+                  )}
+                </td>
+                <td className="py-3 px-3 text-right space-x-2">
+                  {isAdmin && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditUser(p)}
+                        className="text-xs font-semibold text-[#1F4638] hover:text-[#18372c] underline"
+                      >
+                        Editar usuario completo
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteUser(p)}
+                        className="text-xs font-semibold text-red-600 hover:text-red-800 underline ml-2"
+                      >
+                        Eliminar
+                      </button>
+                    </>
+                  )}
                 </td>
               </tr>
             ))}
@@ -204,60 +360,150 @@ function UsersSection() {
 
       {/* Modal para Crear Usuario */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-md p-6 bg-white rounded-lg shadow-lg">
-            <h3 className="mb-4 text-lg font-semibold text-gray-900">Agregar Nuevo Usuario</h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md p-6 bg-white rounded-2xl shadow-xl">
+            <div className="flex items-center justify-between mb-4 border-b pb-3">
+              <h3 className="text-lg font-semibold text-ingles">Agregar Nuevo Usuario</h3>
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600 text-xl font-bold"
+              >
+                ✕
+              </button>
+            </div>
             <form onSubmit={handleAddUser} className="space-y-4">
-              <Field label="Nombre y Apellido">
+              <Field label="Nombre y Apellido *">
                 <input
                   type="text"
                   required
-                  className="input w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-[#1F4638]"
+                  className="input"
                   placeholder="Ej. Lorena Lopez"
                   value={newUser.full_name}
                   onChange={(e) => setNewUser({ ...newUser, full_name: e.target.value })}
                 />
               </Field>
 
-              <Field label="Correo electrónico (Email)">
+              <Field label="Correo electrónico (Email) *">
                 <input
                   type="email"
                   required
-                  className="input w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-[#1F4638]"
+                  className="input"
                   placeholder="lorena@ejemplo.com"
                   value={newUser.email}
                   onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
                 />
               </Field>
 
-              <Field label="Contraseña inicial">
+              <Field label="Rol en el sistema *">
+                <select
+                  className="input"
+                  value={newUser.role}
+                  onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
+                >
+                  <option value="receptionist">Recepcionista</option>
+                  <option value="professional">Profesional</option>
+                  <option value="admin">Administrador</option>
+                </select>
+              </Field>
+
+              {newUser.role !== 'admin' && (
+                <div className="p-3 bg-amber-50 rounded-lg border border-amber-200">
+                  <p className="text-xs text-amber-800 font-medium mb-1">
+                    🔒 Contraseña distinta de administrador:
+                  </p>
+                  <p className="text-[11px] text-amber-700">
+                    Al asignar un rol distinto al admin ({roleLabels[newUser.role]}), asignale una contraseña propia para que ingrese a su sesión. Este usuario no tendrá acceso a Configuración ni Reportes.
+                  </p>
+                </div>
+              )}
+
+              <Field label="Contraseña inicial del usuario *">
                 <input
                   type="password"
                   required
-                  className="input w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-[#1F4638]"
+                  className="input"
                   placeholder="Mínimo 6 caracteres"
                   value={newUser.password}
                   onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
                 />
               </Field>
 
-              <Field label="Rol en el sistema">
-                <select
-                  className="input w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-[#1F4638]"
-                  value={newUser.role}
-                  onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
-                >
-                  <option value="admin">Administrador</option>
-                  <option value="receptionist">Recepcionista</option>
-                  <option value="professional">Profesional</option>
-                </select>
-              </Field>
-
               <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
                 <Button type="button" variant="ghost" onClick={() => setIsModalOpen(false)}>
                   Cancelar
                 </Button>
-                <Button type="submit">Guardar Usuario</Button>
+                <Button type="submit" disabled={creating}>
+                  {creating ? 'Guardando…' : 'Crear Usuario'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal para Editar Usuario Completo (Solo Admin) */}
+      {editingUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md p-6 bg-white rounded-2xl shadow-xl">
+            <div className="flex items-center justify-between mb-4 border-b pb-3">
+              <h3 className="text-lg font-semibold text-ingles">Editar Usuario Completo</h3>
+              <button
+                type="button"
+                onClick={() => setEditingUser(null)}
+                className="text-gray-400 hover:text-gray-600 text-xl font-bold"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleSaveEditUser} className="space-y-4">
+              <Field label="Nombre y Apellido *">
+                <input
+                  type="text"
+                  required
+                  className="input"
+                  value={editFormData.full_name}
+                  onChange={(e) => setEditFormData({ ...editFormData, full_name: e.target.value })}
+                />
+              </Field>
+
+              <Field label="Rol en el sistema">
+                <select
+                  className="input"
+                  value={editFormData.role}
+                  onChange={(e) => setEditFormData({ ...editFormData, role: e.target.value })}
+                >
+                  <option value="receptionist">Recepcionista</option>
+                  <option value="professional">Profesional</option>
+                  <option value="admin">Administrador</option>
+                </select>
+              </Field>
+
+              {editFormData.role !== 'admin' && (
+                <div className="p-3 bg-stone-50 rounded-lg border border-stone-200">
+                  <p className="text-xs text-stone-700">
+                    ℹ️ Los roles de Recepcionista y Profesional pueden ingresar a su sesión pero no tienen acceso a Configuración ni Reportes.
+                  </p>
+                </div>
+              )}
+
+              <Field label="Asignar nueva contraseña (opcional)">
+                <input
+                  type="password"
+                  className="input"
+                  placeholder="Dejar en blanco para mantener la actual"
+                  value={editFormData.newPassword}
+                  onChange={(e) => setEditFormData({ ...editFormData, newPassword: e.target.value })}
+                />
+              </Field>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
+                <Button type="button" variant="ghost" onClick={() => setEditingUser(null)}>
+                  Cancelar
+                </Button>
+                <Button type="submit" disabled={savingEdit}>
+                  {savingEdit ? 'Guardando…' : 'Guardar Cambios'}
+                </Button>
               </div>
             </form>
           </div>
@@ -272,19 +518,17 @@ function SecuritySection() {
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState('')
 
   const handleUpdatePassword = async (e) => {
     e.preventDefault()
-    setMessage('')
 
     if (newPassword.length < 6) {
-      setMessage('Error: La contraseña debe tener al menos 6 caracteres.')
+      showWarning('Contraseña corta', 'La contraseña debe tener al menos 6 caracteres.')
       return
     }
 
     if (newPassword !== confirmPassword) {
-      setMessage('Error: Las contraseñas no coinciden.')
+      showWarning('Contraseñas no coinciden', 'Las contraseñas no coinciden.')
       return
     }
 
@@ -292,15 +536,15 @@ function SecuritySection() {
     const { error } = await supabase.auth.updateUser({
       password: newPassword,
     })
+    setSaving(false)
 
     if (error) {
-      setMessage('Error al actualizar: ' + error.message)
+      showError('Error al actualizar', error.message)
     } else {
-      setMessage('¡Contraseña actualizada correctamente!')
+      showSuccess('¡Contraseña actualizada!', 'Tu contraseña ha sido cambiada exitosamente.')
       setNewPassword('')
       setConfirmPassword('')
     }
-    setSaving(false)
   }
 
   return (
@@ -326,12 +570,6 @@ function SecuritySection() {
           placeholder="Repite la contraseña"
         />
       </Field>
-
-      {message && (
-        <p className={`text-sm font-medium ${message.startsWith('Error') ? 'text-red-600' : 'text-emerald-700'}`}>
-          {message}
-        </p>
-      )}
 
       <Button type="submit" disabled={saving}>
         {saving ? 'Actualizando...' : 'Cambiar contraseña'}

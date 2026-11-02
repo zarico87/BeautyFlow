@@ -6,6 +6,7 @@ import PageHeader from '@/components/ui/PageHeader'
 import StatusBadge from '@/components/ui/StatusBadge'
 import { dateISO, formatDate } from '@/utils/dates'
 import { supabase } from '@/lib/supabase'
+import { showError, showSuccess } from '@/utils/alerts'
 
 const emptyForm = () => ({
   clientId: '',
@@ -27,6 +28,15 @@ export default function Appointments() {
   const [services, setServices] = useState([])
   const [professionals, setProfessionals] = useState([])
   const [appointments, setAppointments] = useState([])
+
+  // Modal para ingresar nuevo cliente
+  const [isClientModalOpen, setIsClientModalOpen] = useState(false)
+  const [newClient, setNewClient] = useState({
+    full_name: '',
+    phone: '',
+    email: '',
+    notes: '',
+  })
 
   // Cargar catálogos iniciales
   useEffect(() => {
@@ -92,9 +102,39 @@ export default function Appointments() {
       .eq('id', id)
 
     if (error) {
-      alert('Error al actualizar estado: ' + error.message)
+      showError('Error al actualizar estado', error.message)
     } else {
+      showSuccess('Estado actualizado', `Turno marcado como ${newStatus}.`)
       fetchAppointments()
+    }
+  }
+
+  // Guardar un nuevo cliente directamente desde la agenda
+  const handleCreateClient = async (e) => {
+    e.preventDefault()
+    if (!newClient.full_name.trim()) return
+
+    const { data, error } = await supabase
+      .from('clients')
+      .insert([
+        {
+          full_name: newClient.full_name.trim(),
+          phone: newClient.phone.trim() || null,
+          email: newClient.email.trim() || null,
+          notes: newClient.notes.trim() || null,
+        },
+      ])
+      .select()
+      .single()
+
+    if (error) {
+      showError('Error al guardar el cliente', error.message)
+    } else {
+      showSuccess('¡Cliente creado!', `${data.full_name} fue registrado con éxito.`)
+      setClients((prev) => [...prev, data].sort((a, b) => a.full_name.localeCompare(b.full_name)))
+      setForm((f) => ({ ...f, clientId: data.id }))
+      setNewClient({ full_name: '', phone: '', email: '', notes: '' })
+      setIsClientModalOpen(false)
     }
   }
 
@@ -141,7 +181,7 @@ export default function Appointments() {
 
     setDay(form.date)
     setForm(emptyForm())
-    setMessage('Turno creado correctamente.')
+    showSuccess('¡Turno creado!', 'El turno se registró correctamente en la agenda.')
     fetchAppointments()
   }
 
@@ -210,14 +250,26 @@ export default function Appointments() {
 
         <Card title="Nueva reserva" className="lg:col-span-2">
           <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-            <Field label="Clienta" error={errors.clientId}>
-              <select className="input" value={form.clientId} onChange={update('clientId')}>
-                <option value="">Seleccionar…</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>{c.full_name}</option>
-                ))}
-              </select>
-            </Field>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm font-medium text-gray-700">Clienta</span>
+                <button
+                  type="button"
+                  onClick={() => setIsClientModalOpen(true)}
+                  className="text-xs font-semibold text-[#1F4638] hover:text-[#18372c] hover:underline flex items-center gap-1"
+                >
+                  + Ingresar nuevo cliente
+                </button>
+              </div>
+              <Field error={errors.clientId}>
+                <select className="input" value={form.clientId} onChange={update('clientId')}>
+                  <option value="">Seleccionar…</option>
+                  {clients.map((c) => (
+                    <option key={c.id} value={c.id}>{c.full_name}</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
             <Field label="Servicio" error={errors.serviceId}>
               <select className="input" value={form.serviceId} onChange={update('serviceId')}>
                 <option value="">Seleccionar…</option>
@@ -247,6 +299,75 @@ export default function Appointments() {
           </form>
         </Card>
       </div>
+
+      {/* Modal para ingresar nuevo cliente */}
+      {isClientModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md p-6 bg-white rounded-2xl shadow-xl">
+            <div className="flex items-center justify-between mb-4 border-b pb-3">
+              <h3 className="text-lg font-semibold text-ingles">Ingresar Nuevo Cliente</h3>
+              <button
+                type="button"
+                onClick={() => setIsClientModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600 text-xl font-bold"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleCreateClient} className="space-y-4">
+              <Field label="Nombre y Apellido *">
+                <input
+                  type="text"
+                  required
+                  className="input"
+                  placeholder="Ej: María Gómez"
+                  value={newClient.full_name}
+                  onChange={(e) => setNewClient({ ...newClient, full_name: e.target.value })}
+                />
+              </Field>
+
+              <Field label="Teléfono / WhatsApp">
+                <input
+                  type="tel"
+                  className="input"
+                  placeholder="Ej: +54 9 11 1234-5678"
+                  value={newClient.phone}
+                  onChange={(e) => setNewClient({ ...newClient, phone: e.target.value })}
+                />
+              </Field>
+
+              <Field label="Email">
+                <input
+                  type="email"
+                  className="input"
+                  placeholder="Ej: maria@ejemplo.com"
+                  value={newClient.email}
+                  onChange={(e) => setNewClient({ ...newClient, email: e.target.value })}
+                />
+              </Field>
+
+              <Field label="Notas o preferencias">
+                <textarea
+                  className="input"
+                  rows={2}
+                  placeholder="Alergias, preferencias o detalles..."
+                  value={newClient.notes}
+                  onChange={(e) => setNewClient({ ...newClient, notes: e.target.value })}
+                />
+              </Field>
+
+              <div className="flex justify-end gap-3 pt-3 border-t">
+                <Button type="button" variant="ghost" onClick={() => setIsClientModalOpen(false)}>
+                  Cancelar
+                </Button>
+                <Button type="submit">
+                  Guardar y Seleccionar
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   )
 }

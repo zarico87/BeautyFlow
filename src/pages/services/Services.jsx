@@ -3,6 +3,7 @@ import DataTable from '@/components/ui/DataTable'
 import PageHeader from '@/components/ui/PageHeader'
 import { formatPrice } from '@/utils/dates'
 import { supabase } from '@/lib/supabase'
+import { showError, showSuccess, showConfirm } from '@/utils/alerts'
 
 /** Carga los servicios ordenados por fecha de creación */
 export async function loadServices() {
@@ -57,8 +58,9 @@ export default function Services() {
       ])
 
     if (error) {
-      alert('Error al guardar el servicio: ' + error.message)
+      showError('Error al guardar el servicio', error.message)
     } else {
+      showSuccess('¡Servicio guardado!', 'El servicio se agregó al catálogo.')
       setFormData({ name: '', duration_minutes: 30, price: '' })
       setIsModalOpen(false)
       fetchServices()
@@ -73,15 +75,20 @@ export default function Services() {
       .eq('id', id)
 
     if (error) {
-      alert('Error al actualizar el estado: ' + error.message)
+      showError('Error al actualizar el estado', error.message)
     } else {
+      showSuccess(currentStatus ? 'Servicio pausado' : 'Servicio activado')
       fetchServices()
     }
   }
 
   // Eliminar un servicio
   const handleDelete = async (id) => {
-    if (!confirm('¿Estás seguro de que deseas eliminar este servicio?')) return
+    const confirmed = await showConfirm(
+      '¿Eliminar servicio?',
+      '¿Estás seguro de que deseas eliminar este servicio de forma permanente?'
+    )
+    if (!confirmed) return
 
     const { error } = await supabase
       .from('services')
@@ -89,8 +96,9 @@ export default function Services() {
       .eq('id', id)
 
     if (error) {
-      alert('Error al eliminar el servicio: ' + error.message)
+      showError('Error al eliminar el servicio', error.message)
     } else {
+      showSuccess('Servicio eliminado')
       fetchServices()
     }
   }

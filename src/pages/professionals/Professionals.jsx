@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import DataTable from '@/components/ui/DataTable'
 import PageHeader from '@/components/ui/PageHeader'
 import { supabase } from '@/lib/supabase'
+import { showError, showSuccess, showConfirm } from '@/utils/alerts'
 
 /** Carga los profesionales ordenados por fecha de creación */
 export async function loadProfessionals() {
@@ -54,8 +55,9 @@ export default function Professionals() {
       ])
 
     if (error) {
-      alert('Error al guardar el profesional: ' + error.message)
+      showError('Error al guardar el profesional', error.message)
     } else {
+      showSuccess('¡Profesional guardado!', 'El profesional se agregó al equipo.')
       setFormData({ name: '', specialty: '' })
       setIsModalOpen(false)
       fetchProfessionals()
@@ -70,15 +72,20 @@ export default function Professionals() {
       .eq('id', id)
 
     if (error) {
-      alert('Error al actualizar el estado: ' + error.message)
+      showError('Error al actualizar el estado', error.message)
     } else {
+      showSuccess(currentStatus ? 'Profesional pausado' : 'Profesional activado')
       fetchProfessionals()
     }
   }
 
   // Eliminar un profesional
   const handleDelete = async (id) => {
-    if (!confirm('¿Estás seguro de que deseas eliminar este profesional?')) return
+    const confirmed = await showConfirm(
+      '¿Eliminar profesional?',
+      '¿Estás seguro de que deseas eliminar este profesional del sistema?'
+    )
+    if (!confirmed) return
 
     const { error } = await supabase
       .from('professionals')
@@ -86,8 +93,9 @@ export default function Professionals() {
       .eq('id', id)
 
     if (error) {
-      alert('Error al eliminar el profesional: ' + error.message)
+      showError('Error al eliminar el profesional', error.message)
     } else {
+      showSuccess('Profesional eliminado')
       fetchProfessionals()
     }
   }

@@ -6,12 +6,36 @@ import PageHeader from '@/components/ui/PageHeader'
 import StatusBadge from '@/components/ui/StatusBadge'
 import { formatPrice, formatDate } from '@/utils/dates'
 import { supabase } from '@/lib/supabase'
+import { showError, showSuccess } from '@/utils/alerts'
+
+export const PAYMENT_METHODS = [
+  { value: 'mercado_pago', label: 'Mercado Pago' },
+  { value: 'transferencia', label: 'Transferencia bancaria' },
+  { value: 'efectivo', label: 'Efectivo' },
+  { value: 'tarjeta_debito', label: 'Tarjeta Débito' },
+  { value: 'tarjeta_credito', label: 'Tarjeta Crédito' },
+  { value: 'go_cuotas', label: 'Go Cuotas' },
+]
+
+export const methodLabels = {
+  mercado_pago: 'Mercado Pago',
+  transferencia: 'Transferencia bancaria',
+  efectivo: 'Efectivo',
+  tarjeta_debito: 'Tarjeta Débito',
+  tarjeta_credito: 'Tarjeta Crédito',
+  go_cuotas: 'Go Cuotas',
+}
 
 export default function Payments() {
   const [payments, setPayments] = useState([])
   const [appointments, setAppointments] = useState([])
   const [loading, setLoading] = useState(true)
   const [isModalOpen, setIsModalOpen] = useState(false)
+
+  // Estado para editar método de pago
+  const [editingPayment, setEditingPayment] = useState(null)
+  const [editMethod, setEditMethod] = useState('efectivo')
+  const [savingEdit, setSavingEdit] = useState(false)
 
   const [form, setForm] = useState({
     appointment_id: '',
@@ -67,47 +91,63 @@ export default function Payments() {
     fetchData()
   }, [])
 
-  // Registrar cobro o generar cobro por Mercado Pago
+  // Registrar cobro (guardar directamente sin redirigir)
   const handleSubmit = async (e) => {
     e.preventDefault()
     if (!form.appointment_id || !form.amount) return
 
     // Registrar en la base de datos de Supabase
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('payments')
       .insert([
         {
           appointment_id: form.appointment_id,
           amount: parseFloat(form.amount),
           method: form.method,
-          status: form.method === 'mercado_pago' ? 'pendiente' : 'aprobado',
+          status: 'aprobado',
           is_deposit: form.is_deposit,
         },
       ])
       .select()
 
     if (error) {
-      alert('Error al registrar el pago: ' + error.message)
+      showError('Error al registrar el pago', error.message)
       return
     }
 
-    // Si el método es Mercado Pago, aquí se dispara la integración con el Checkout
-    if (form.method === 'mercado_pago') {
-      alert('Pago pendiente registrado. Redirigiendo a checkout de Mercado Pago...')
-      // Aquí invocas la función backend que crea la preferencia en MP con data[0].id
-    } else {
-      alert('Pago registrado correctamente.')
-    }
+    showSuccess('¡Pago registrado!', 'El cobro ha sido guardado correctamente en caja.')
 
     setForm({ appointment_id: '', amount: '', method: 'mercado_pago', is_deposit: false })
     setIsModalOpen(false)
     fetchData()
   }
 
+  // Guardar edición del método de pago
+  const handleUpdatePaymentMethod = async (e) => {
+    e.preventDefault()
+    if (!editingPayment) return
+    setSavingEdit(true)
+
+    const { error } = await supabase
+      .from('payments')
+      .update({ method: editMethod })
+      .eq('id', editingPayment.id)
+
+    setSavingEdit(false)
+
+    if (error) {
+      showError('Error al actualizar método', error.message)
+    } else {
+      showSuccess('Método actualizado', `El pago ahora figura como ${methodLabels[editMethod] || editMethod}.`)
+      setEditingPayment(null)
+      fetchData()
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <PageHeader title="Caja y Pagos" subtitle="Gestión de señas y cobros con Mercado Pago" />
+        <PageHeader title="Caja y Pagos" subtitle="Gestión de señas y cobros del salón" />
         <Button onClick={() => setIsModalOpen(true)}>+ Registrar Cobro</Button>
       </div>
 
@@ -128,6 +168,7 @@ export default function Payments() {
                   <th className="py-2 px-3">Tipo</th>
                   <th className="py-2 px-3">Monto</th>
                   <th className="py-2 px-3">Estado</th>
+                  <th className="py-2 px-3 text-right">Acción</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-arena">
@@ -138,7 +179,11 @@ export default function Payments() {
                       {p.appointments?.clients?.full_name || 'Cliente general'}
                     </td>
                     <td className="py-3 px-3">{p.appointments?.services?.name || '-'}</td>
-                    <td className="py-3 px-3 capitalize">{p.method.replace('_', ' ')}</td>
+                    <td className="py-3 px-3">
+                      <span className="inline-flex items-center rounded-md bg-stone-100 px-2 py-1 text-xs font-medium text-stone-800">
+                        {methodLabels[p.method] || p.method?.replace('_', ' ')}
+                      </span>
+                    </td>
                     <td className="py-3 px-3">
                       <span className={`px-2 py-0.5 text-xs rounded-full ${p.is_deposit ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'}`}>
                         {p.is_deposit ? 'Seña' : 'Total'}
@@ -150,6 +195,18 @@ export default function Payments() {
                     <td className="py-3 px-3">
                       <StatusBadge status={p.status} />
                     </td>
+                    <td className="py-3 px-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingPayment(p)
+                          setEditMethod(p.method)
+                        }}
+                        className="text-xs font-semibold text-[#1F4638] hover:text-[#18372c] underline"
+                      >
+                        Editar método
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -158,11 +215,65 @@ export default function Payments() {
         )}
       </Card>
 
-      {/* Modal para registrar o solicitar pago */}
+      {/* Modal para editar método de pago */}
+      {editingPayment && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-sm p-6 bg-white rounded-2xl shadow-xl">
+            <div className="flex items-center justify-between mb-4 border-b pb-3">
+              <h3 className="text-lg font-semibold text-ingles">Editar Método de Pago</h3>
+              <button
+                type="button"
+                onClick={() => setEditingPayment(null)}
+                className="text-gray-400 hover:text-gray-600 text-xl font-bold"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="text-xs text-taupe mb-4">
+              Transacción de <strong className="text-gray-800">{editingPayment.appointments?.clients?.full_name || 'Cliente'}</strong> por {formatPrice(editingPayment.amount)}.
+            </p>
+            <form onSubmit={handleUpdatePaymentMethod} className="space-y-4">
+              <Field label="Seleccionar nuevo método de pago">
+                <select
+                  className="input"
+                  value={editMethod}
+                  onChange={(e) => setEditMethod(e.target.value)}
+                >
+                  {PAYMENT_METHODS.map((m) => (
+                    <option key={m.value} value={m.value}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <div className="flex justify-end gap-3 pt-3 border-t">
+                <Button type="button" variant="ghost" onClick={() => setEditingPayment(null)}>
+                  Cancelar
+                </Button>
+                <Button type="submit" disabled={savingEdit}>
+                  {savingEdit ? 'Guardando…' : 'Guardar Cambio'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal para registrar pago */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-md p-6 bg-white rounded-lg shadow-lg">
-            <h3 className="mb-4 text-lg font-semibold text-gray-900">Registrar / Solicitar Pago</h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md p-6 bg-white rounded-2xl shadow-xl">
+            <div className="flex items-center justify-between mb-4 border-b pb-3">
+              <h3 className="text-lg font-semibold text-ingles">Registrar Pago</h3>
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600 text-xl font-bold"
+              >
+                ✕
+              </button>
+            </div>
             <form onSubmit={handleSubmit} className="space-y-4">
               <Field label="Turno / Clienta">
                 <select
@@ -205,9 +316,11 @@ export default function Payments() {
                   value={form.method}
                   onChange={(e) => setForm({ ...form, method: e.target.value })}
                 >
-                  <option value="mercado_pago">Mercado Pago (Link / QR)</option>
-                  <option value="transferencia">Transferencia bancaria</option>
-                  <option value="efectivo">Efectivo</option>
+                  {PAYMENT_METHODS.map((m) => (
+                    <option key={m.value} value={m.value}>
+                      {m.label}
+                    </option>
+                  ))}
                 </select>
               </Field>
 
@@ -229,7 +342,7 @@ export default function Payments() {
                   Cancelar
                 </Button>
                 <Button type="submit">
-                  {form.method === 'mercado_pago' ? 'Generar Cobro MP' : 'Guardar Pago'}
+                  Guardar Pago
                 </Button>
               </div>
             </form>
